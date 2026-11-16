@@ -9,7 +9,10 @@ const items = Array.from({ length: N }, (_, i) => ({
   kind: i % 7 === 0 ? "Video" : "Photo",
   desc: i % 11 === 0 ? "my own note" : "",
 }));
-const flaky = new Set(items.filter((_, i) => i % 13 === 5).map(x => x.id));
+const flaky = new Set(items.filter((_, i) => i % 13 === 5).map(x => x.id));        // page broken once
+const saveFails = new Set(items.filter((_, i) => i % 19 === 4).map(x => x.id));    // save returns 500 once
+const narrow = new Set(items.filter((_, i) => i % 17 === 3).map(x => x.id));       // panorama 1200x120
+let saves = 0;
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 
 const grid = `<!doctype html><body style="margin:0"><div id=g></div><script>
@@ -21,7 +24,7 @@ more();addEventListener('scroll',()=>{if(innerHeight+scrollY>document.body.scrol
 </script></body>`;
 
 const photo = it => `<!doctype html><body style="margin:0;background:#000">
-<img src="/img/${it.id}" style="width:900px;height:700px">
+<img src="/img/${it.id}" style="${narrow.has(it.id) ? "width:1200px;height:120px" : "width:900px;height:700px"}">
 <aside id=info style="display:none"><textarea aria-label="Description">${it.desc}</textarea></aside><script>
 addEventListener('keydown',e=>{if(e.key==='i')document.getElementById('info').style.display='block'});
 document.querySelector('textarea').addEventListener('blur',e=>fetch('/_/batchexecute?id=${it.id}',{method:'POST',body:e.target.value}));
@@ -45,8 +48,13 @@ http.createServer((req, res) => {
   }
   if (u.pathname === "/_/batchexecute" && req.method === "POST") {
     let body = ""; req.on("data", c => body += c);
-    return req.on("end", () => { items.find(x => x.id === u.searchParams.get("id")).desc = body; res.end("ok"); });
+    return req.on("end", () => {
+      const id = u.searchParams.get("id");
+      if (saveFails.delete(id)) { res.statusCode = 500; return res.end("err"); }
+      items.find(x => x.id === id).desc = body; saves++; res.end("ok");
+    });
   }
   if (u.pathname === "/_/dump") return res.end(JSON.stringify(items));
+  if (u.pathname === "/_/saves") return res.end(String(saves));
   res.statusCode = 404; res.end();
 }).listen(Number(process.env.MOCK_PORT || 8765), () => console.log("mock up"));

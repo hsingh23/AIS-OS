@@ -23,7 +23,7 @@ The login lives in `tools/photos-describer/.chrome-profile/`, which is git-ignor
 
 ```bash
 node cli.mjs probe --n 3              # dry check on 3 items: prints what it would write, writes nothing
-node cli.mjs run --tabs 10 --dry-run  # full pipeline, no writes (optional)
+node cli.mjs run --tabs 10 --dry-run  # full pipeline, no writes (optional; own queue file, won't hide items from the real run)
 node cli.mjs run --tabs 10            # the real thing
 ```
 
@@ -54,7 +54,9 @@ Descriptions look like this:
 
 ## Safety rules built in
 
-- It never overwrites a description you wrote. With `--overwrite` it only rewrites ones that start with `[ai]`.
+- It never overwrites a description you wrote. With `--overwrite` it requeues and rewrites only ones that start with `[ai]`.
+- An item counts as done only after Google's save call returns OK and the field holds the new text. Otherwise it is retried.
+- If the library scan fails (for example, you got signed out), the run exits non-zero, so a partial queue never looks complete.
 - It never names or guesses identities of people.
 - Each tab waits about 1.5 s between items (`throttle_ms`), with jitter. If Google starts erroring, the advisor slows things down. If you get signed out, the run stops with a fatal error.
 
@@ -68,4 +70,4 @@ Every DOM selector is in `lib/gphotos.mjs` under `SELECTORS`. Run `probe`. On fa
 
 ## Test
 
-`./test/e2e.sh` runs the whole pipeline against a local mock of the Photos UI, with no Google account and no model calls. It covers 10 tabs, skip rules, video tagging and retrying flaky pages.
+`./test/e2e.sh` runs the whole pipeline against a local mock of the Photos UI, with no Google account and no model calls. It covers dry-run isolation, 10 tabs, skip rules, video tagging, panoramas, flaky pages, failed saves, `--overwrite`, and crash recovery.

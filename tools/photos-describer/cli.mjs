@@ -16,7 +16,6 @@ import * as G from "./lib/gphotos.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PROFILE = process.env.PHOTOS_PROFILE_DIR || path.join(here, ".chrome-profile");
-const DB_FILE = process.env.PHOTOS_DB || path.join(here, "state", "queue.sqlite");
 
 const { positionals, values: opt } = parseArgs({
   allowPositionals: true,
@@ -28,6 +27,9 @@ const { positionals, values: opt } = parseArgs({
   },
 });
 const cmd = positionals[0] || "status";
+// Dry runs keep separate bookkeeping so simulated "done" rows never hide items from a real run.
+const DB_FILE = (process.env.PHOTOS_DB || path.join(here, "state", "queue.sqlite")).replace(/\.sqlite$/, "") +
+  (opt["dry-run"] ? ".dryrun.sqlite" : ".sqlite");
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
@@ -83,13 +85,14 @@ async function run() {
   const db = Q.openDb(DB_FILE);
   if (opt.tabs) Q.setControl(db, "concurrency", Number(opt.tabs));
   const released = Q.releaseStale(db, 0);
+  if (opt.overwrite) log(`requeued ${Q.requeueOurs(db, AI_MARKER)} items with earlier AI descriptions for --overwrite`);
   if (released) log(`requeued ${released} items left claimed by a previous run`);
   Q.publish(db, "run.start", { dry_run: !!opt["dry-run"], tabs: Q.getControl(db).concurrency });
 
   const ctx = await launch({ headless: opt.headless });
   // Don't download heavy bytes we never look at.
   await ctx.route(/\.(mp4|webm|m3u8)(\?|$)/, r => r.abort());
-  let stopping = false, fatal = null, enumDone = !!opt["no-enumerate"];
+  let stopping = false, fatal = null, enumError = null, enumDone = !!opt["no-enumerate"];
 
   // Producer: one tab scrolls the library and feeds the queue. Workers start as soon as rows land.
   const producer = enumDone ? Promise.resolve() : (async () => {
@@ -103,6 +106,7 @@ async function run() {
         Q.publish(db, "enum.batch", { seen: batch.length, added, total });
       }
     } catch (e) {
+      enumError = e;
       Q.publish(db, "enum.error", { error: e.message });
       log("enumeration error:", e.message);
     } finally {
@@ -135,8 +139,8 @@ async function run() {
       const { text, usage } = await describeImage({ ...still, kind: item.kind });
       if (!opt["dry-run"]) {
         stage = "write";
-        const saved = await G.writeDescription(page, text);
-        if (!saved) throw Object.assign(new Error("no save request seen after blur"), { stage });
+        const saved = await G.writeDescription(page, text, AI_MARKER);
+        if (!saved.ok) throw Object.assign(new Error(saved.reason), { stage });
       }
       Q.finish(db, item.id, "done", { description: text });
       Q.publish(db, "item.done", { worker, item_id: item.id, ms: Date.now() - t0, via: still.via,
@@ -199,10 +203,11 @@ async function run() {
   await sleep(2500); // let the supervisor start workers
   while (active.size) await Promise.race([...active.values()]).catch(() => {});
   clearInterval(supervisor); clearInterval(ticker); if (advisor) clearInterval(advisor);
-  Q.publish(db, "run.end", { fatal: fatal?.message ?? null });
+  Q.publish(db, "run.end", { fatal: fatal?.message ?? null, enum_error: enumError?.message ?? null });
   console.log(JSON.stringify(Q.stats(db), null, 2));
   await ctx.close();
   if (fatal) { console.error("FATAL:", fatal.message); process.exit(2); }
+  if (enumError) { console.error("Library scan failed, queue may be incomplete:", enumError.message); process.exit(3); }
 }
 
 // ---------------------------------------------------------------- status / set / export

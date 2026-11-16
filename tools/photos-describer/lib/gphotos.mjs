@@ -55,7 +55,9 @@ export async function openItem(page, url) {
   await page.waitForFunction(() => {
     const vis = [...document.querySelectorAll("img, video")].filter(el => {
       const r = el.getBoundingClientRect();
-      return r.width > 200 && r.height > 200 && r.right > 0 && r.left < innerWidth;
+      const loaded = el.tagName === "VIDEO" ? (el.poster || el.readyState > 0) : (el.complete && el.naturalWidth > 0);
+      return loaded && Math.max(r.width, r.height) >= 300 && Math.min(r.width, r.height) >= 10 &&
+             r.right > 0 && r.left < innerWidth;
     });
     return vis.length > 0;
   }, null, { timeout: 30_000 });
@@ -106,13 +108,23 @@ export async function readDescription(page) {
   return (await f.evaluate(el => ("value" in el ? el.value : el.textContent) || "")).trim();
 }
 
-// Writes text and waits for Google's save call. Returns true if a save request was seen.
-export async function writeDescription(page, text) {
+// Writes text, waits for the save request that carries it, and checks it succeeded and stuck.
+export async function writeDescription(page, text, marker) {
   const f = await descriptionField(page);
   await f.click();
   await f.fill(text);
-  const saved = page.waitForResponse(r => /batchexecute/.test(r.url()) && r.request().method() === "POST",
-    { timeout: 10_000 }).then(() => true, () => false);
+  const carries = r => {
+    if (!/batchexecute/.test(r.url()) || r.request().method() !== "POST") return false;
+    const body = r.request().postData() || "";
+    let decoded = body; try { decoded = decodeURIComponent(body.replace(/\+/g, " ")); } catch {}
+    return decoded.includes(marker);
+  };
+  const resp = page.waitForResponse(carries, { timeout: 10_000 }).catch(() => null);
   await f.press("Tab"); // blur triggers save
-  return saved;
+  const r = await resp;
+  if (!r) return { ok: false, reason: "no save request carrying the description was seen" };
+  if (!r.ok()) return { ok: false, reason: `save request failed: HTTP ${r.status()}` };
+  const now = await readDescription(page);
+  if (now !== text.trim()) return { ok: false, reason: "description field does not hold the new text after save" };
+  return { ok: true };
 }

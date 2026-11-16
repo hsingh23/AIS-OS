@@ -111,8 +111,16 @@ export function requeue(db, id, error) {
 
 // Claims left behind by a crash go back on the queue.
 export function releaseStale(db, olderThanMs = 5 * 60_000) {
-  return Number(db.prepare("UPDATE items SET status='queued', worker=NULL WHERE status='claimed' AND claimed_at < ?")
-    .run(now() - olderThanMs).changes);
+  // An interrupted attempt doesn't count, so items on their last attempt stay claimable.
+  return Number(db.prepare(`UPDATE items SET status='queued', worker=NULL, attempts=MAX(attempts-1, 0)
+                            WHERE status='claimed' AND claimed_at <= ?`).run(now() - olderThanMs).changes);
+}
+
+// For --overwrite: put items this tool already described back on the queue. User descriptions never match.
+export function requeueOurs(db, marker) {
+  return Number(db.prepare(`UPDATE items SET status='queued', attempts=0, worker=NULL
+                            WHERE status IN ('done','skipped') AND substr(description, 1, ?) = ?`)
+    .run(marker.length, marker).changes);
 }
 
 export function stats(db, windowMs = 10 * 60_000) {
