@@ -1,0 +1,17 @@
+{
+  "name": "photos-describer",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "login": "node cli.mjs login",
+    "probe": "node cli.mjs probe",
+    "run": "node cli.mjs run",
+    "status": "node cli.mjs status"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "latest",
+    "playwright": "^1.50.0",
+    "zod": "^3.25.0"
+  }
+}
